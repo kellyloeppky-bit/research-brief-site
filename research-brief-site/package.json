@@ -1,0 +1,24 @@
+{
+  "name": "sales-research-brief-generator",
+  "version": "1.0.0",
+  "description": "CDW Sales Research Brief Generator",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "sales",
+    "research",
+    "brief",
+    "cdw"
+  ],
+  "author": "CDW",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
