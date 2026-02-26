@@ -28,6 +28,10 @@ import radonZonesRoutes from './routes/radon-zones.routes.js';
 import kitOrdersRoutes from './routes/kit-orders.routes.js';
 import testSessionsRoutes from './routes/test-sessions.routes.js';
 
+// Phase 5 routes
+import resultsRoutes from './routes/results.routes.js';
+import certificatesRoutes from './routes/certificates.routes.js';
+
 dotenv.config();
 
 const server = Fastify({
@@ -57,6 +61,10 @@ await server.register(radonZonesRoutes, { prefix: '/api/v1/radon-zones' });
 // Phase 4: Register API routes
 await server.register(kitOrdersRoutes, { prefix: '/api/v1/kit-orders' });
 await server.register(testSessionsRoutes, { prefix: '/api/v1/test-sessions' });
+
+// Phase 5: Register API routes
+await server.register(resultsRoutes, { prefix: '/api/v1/results' });
+await server.register(certificatesRoutes, { prefix: '/api/v1/certificates' });
 
 // Health check route
 server.get('/health', async (_request, reply) => {

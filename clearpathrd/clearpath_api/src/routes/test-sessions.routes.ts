@@ -4,7 +4,6 @@
  * TestSession API with state machine and timeline management.
  */
 
-import { z } from 'zod';
 import { FastifyPluginAsync } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { authenticate } from '../middleware/authenticate.js';
@@ -58,12 +57,6 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
       preHandler: [authenticate],
       schema: {
         body: createTestSessionSchema,
-        response: {
-          201: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -159,18 +152,6 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
       preHandler: [authenticate],
       schema: {
         querystring: listTestSessionsQuerySchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.array(z.any()),
-            pagination: z.object({
-              page: z.number(),
-              limit: z.number(),
-              total: z.number(),
-              totalPages: z.number(),
-            }),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -244,12 +225,6 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
       ],
       schema: {
         params: getTestSessionParamsSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -288,12 +263,6 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
       schema: {
         params: updateTestSessionParamsSchema,
         body: updateTestSessionSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -367,12 +336,6 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
       schema: {
         params: actionTestSessionParamsSchema,
         body: retrieveTestSessionSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -420,12 +383,6 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
       schema: {
         params: actionTestSessionParamsSchema,
         body: mailTestSessionSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -483,12 +440,6 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
       ],
       schema: {
         params: actionTestSessionParamsSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {

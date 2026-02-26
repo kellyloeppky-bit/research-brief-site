@@ -5,7 +5,6 @@
  * Stripe integration deferred to Phase 6.
  */
 
-import { z } from 'zod';
 import { FastifyPluginAsync } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { authenticate } from '../middleware/authenticate.js';
@@ -40,12 +39,6 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
       preHandler: [authenticate],
       schema: {
         body: createKitOrderSchema,
-        response: {
-          201: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -113,18 +106,6 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
       preHandler: [authenticate],
       schema: {
         querystring: listKitOrdersQuerySchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.array(z.any()),
-            pagination: z.object({
-              page: z.number(),
-              limit: z.number(),
-              total: z.number(),
-              totalPages: z.number(),
-            }),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -191,12 +172,6 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
       ],
       schema: {
         params: getKitOrderParamsSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -226,12 +201,6 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
       schema: {
         params: getKitOrderParamsSchema,
         body: updateKitOrderSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.any(),
-          }),
-        },
       },
     },
     async (request, reply) => {
@@ -268,14 +237,6 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
       preHandler: [authenticate, requireAuth('admin')],
       schema: {
         params: deleteKitOrderParamsSchema,
-        response: {
-          200: z.object({
-            success: z.boolean(),
-            data: z.object({
-              message: z.string(),
-            }),
-          }),
-        },
       },
     },
     async (request, reply) => {
