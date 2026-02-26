@@ -1,0 +1,1342 @@
+openapi: 3.1.0
+
+info:
+  title: ClearPath RD API
+  version: 1.0.0
+  description: |
+    REST API for the ClearPath RD guided radon testing platform.
+
+    **Base URL:** `https://api.clearpathrd.com/api/v1`
+
+    **Authentication:** All endpoints except `/auth/*`, `/verify/:id`, and `/contractors` (GET)
+    require a Bearer token issued by Supabase Auth.
+
+    ```
+    Authorization: Bearer <supabase_access_token>
+    ```
+
+    **Error format:** All errors return a consistent envelope:
+    ```json
+    {
+      "error": {
+        "code": "RESOURCE_NOT_FOUND",
+        "message": "The requested home was not found.",
+        "field": null
+      }
+    }
+    ```
+
+    **Dates:** All timestamps are ISO 8601 UTC. Date-only fields (activated_at, valid_from, etc.)
+    use `YYYY-MM-DD` format.
+
+  contact:
+    name: ClearPath RD
+    url: https://clearpathrd.com
+    email: support@clearpathrd.com
+
+servers:
+  - url: https://api.clearpathrd.com/api/v1
+    description: Production
+  - url: https://staging-api.clearpathrd.com/api/v1
+    description: Staging
+  - url: http://localhost:3000/api/v1
+    description: Local development
+
+# ── TAGS ──────────────────────────────────────────────────────
+tags:
+  - name: Auth
+    description: Registration, login, email verification
+  - name: Homes
+    description: Property management
+  - name: Kit Orders
+    description: Kit purchase and fulfilment
+  - name: Test Sessions
+    description: Test lifecycle state machine
+  - name: Results
+    description: Lab result entry
+  - name: Certificates
+    description: Certificate retrieval and public verification
+  - name: Contractors
+    description: Directory and referral leads
+  - name: Referral Codes
+    description: Code validation and application
+  - name: Webhooks
+    description: Stripe and Resend inbound webhook handlers
+  - name: Admin
+    description: Admin-only platform management endpoints
+
+# ── SECURITY ──────────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase Auth JWT access token
+
+  # ── SHARED SCHEMAS ─────────────────────────────────────────
+  schemas:
+
+    # --- Error ---
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:    { type: string, example: VALIDATION_ERROR }
+            message: { type: string, example: "postal_code must be in A1A 1A1 format." }
+            field:   { type: string, nullable: true, example: postal_code }
+
+    # --- Pagination ---
+    PaginationMeta:
+      type: object
+      properties:
+        total:   { type: integer, example: 42 }
+        page:    { type: integer, example: 1 }
+        perPage: { type: integer, example: 20 }
+        pages:   { type: integer, example: 3 }
+
+    # --- User ---
+    User:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        email:           { type: string, format: email }
+        firstName:       { type: string }
+        lastName:        { type: string }
+        phone:           { type: string, nullable: true }
+        role:            { type: string, enum: [user, admin] }
+        marketingConsent: { type: boolean }
+        emailVerifiedAt: { type: string, format: date-time, nullable: true }
+        createdAt:       { type: string, format: date-time }
+
+    # --- Home ---
+    Home:
+      type: object
+      properties:
+        id:                   { type: string, format: uuid }
+        userId:               { type: string, format: uuid }
+        nickname:             { type: string, nullable: true }
+        addressLine1:         { type: string }
+        addressLine2:         { type: string, nullable: true }
+        city:                 { type: string }
+        province:             { type: string, example: AB }
+        postalCode:           { type: string, example: T2J 4K9 }
+        fsa:                  { type: string, example: T2J }
+        ageRange:
+          type: string
+          enum: [pre_1980, "1980_2000", "2000_2010", post_2010, unknown]
+        foundationType:
+          type: string
+          enum: [full_basement, partial_basement, crawl_space, slab, unknown]
+        basementOccupancy:
+          type: string
+          enum: [primary_living, occasional, storage, no_basement]
+        roughinPresent:       { type: boolean }
+        radonZone:            { type: integer, minimum: 1, maximum: 4 }
+        regionalPrevalencePct: { type: number, format: decimal }
+        createdAt:            { type: string, format: date-time }
+        updatedAt:            { type: string, format: date-time }
+
+    HomeCreate:
+      type: object
+      required: [addressLine1, city, province, postalCode, ageRange, foundationType, basementOccupancy]
+      properties:
+        nickname:          { type: string }
+        addressLine1:      { type: string }
+        addressLine2:      { type: string }
+        city:              { type: string }
+        province:          { type: string, example: AB }
+        postalCode:        { type: string, example: T2J 4K9, pattern: '^[A-Za-z]\d[A-Za-z] \d[A-Za-z]\d$' }
+        ageRange:          { type: string, enum: [pre_1980, "1980_2000", "2000_2010", post_2010, unknown] }
+        foundationType:    { type: string, enum: [full_basement, partial_basement, crawl_space, slab, unknown] }
+        basementOccupancy: { type: string, enum: [primary_living, occasional, storage, no_basement] }
+        roughinPresent:    { type: boolean, default: false }
+
+    # --- TestSession ---
+    TestSession:
+      type: object
+      properties:
+        id:                    { type: string, format: uuid }
+        homeId:                { type: string, format: uuid }
+        kitOrderId:            { type: string, format: uuid }
+        kitType:               { type: string, enum: [long_term, real_estate_short] }
+        status:
+          type: string
+          enum: [ordered, active, retrieval_due, mailed, results_pending, complete, expired, cancelled]
+        kitSerialNumber:       { type: string }
+        placementRoom:         { type: string }
+        placementDescription:  { type: string, nullable: true }
+        activatedAt:           { type: string, format: date, nullable: true }
+        expectedCompletionDate: { type: string, format: date, nullable: true }
+        retrievalDueAt:        { type: string, format: date, nullable: true }
+        retrievedAt:           { type: string, format: date, nullable: true }
+        mailedAt:              { type: string, format: date, nullable: true }
+        createdAt:             { type: string, format: date-time }
+        updatedAt:             { type: string, format: date-time }
+
+    # --- Result ---
+    Result:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        testSessionId:   { type: string, format: uuid }
+        valueBqm3:       { type: number, format: decimal, example: 87.5 }
+        zone:            { type: string, enum: [below_guideline, caution, action_required, urgent_action] }
+        labReference:    { type: string, nullable: true }
+        enteredByUserId: { type: string, format: uuid }
+        isImmutable:     { type: boolean }
+        recordedAt:      { type: string, format: date-time }
+        createdAt:       { type: string, format: date-time }
+
+    # --- Certificate ---
+    Certificate:
+      type: object
+      properties:
+        id:                { type: string, format: uuid, description: Public verification token }
+        resultId:          { type: string, format: uuid }
+        homeId:            { type: string, format: uuid }
+        certificateNumber: { type: string, example: CRD-2026-00142 }
+        certType:          { type: string, enum: [residential, real_estate] }
+        status:            { type: string, enum: [valid, expired, superseded] }
+        verificationUrl:   { type: string, format: uri }
+        pdfStoragePath:    { type: string, nullable: true }
+        validFrom:         { type: string, format: date }
+        validUntil:        { type: string, format: date }
+        generatedAt:       { type: string, format: date-time }
+        supersededAt:      { type: string, format: date-time, nullable: true }
+
+    # Certificate public verification (no PII, no Bq value)
+    CertificatePublic:
+      type: object
+      properties:
+        certificateNumber: { type: string, example: CRD-2026-00142 }
+        certType:          { type: string, enum: [residential, real_estate] }
+        status:            { type: string, enum: [valid, expired, superseded] }
+        zone:              { type: string, enum: [below_guideline, caution, action_required, urgent_action] }
+        city:              { type: string }
+        province:          { type: string }
+        validFrom:         { type: string, format: date }
+        validUntil:        { type: string, format: date }
+        generatedAt:       { type: string, format: date-time }
+
+    # --- KitOrder ---
+    KitOrder:
+      type: object
+      properties:
+        id:                   { type: string, format: uuid }
+        userId:               { type: string, format: uuid }
+        homeId:               { type: string, format: uuid }
+        productSku:           { type: string, enum: [standard_long, real_estate_short, twin_pack] }
+        quantity:             { type: integer }
+        shippingAddressLine1: { type: string }
+        shippingCity:         { type: string }
+        shippingProvince:     { type: string }
+        shippingPostalCode:   { type: string }
+        subtotalCad:          { type: number }
+        taxCad:               { type: number }
+        totalCad:             { type: number }
+        paymentStatus:        { type: string, enum: [pending, paid, failed, refunded] }
+        referralCodeId:       { type: string, format: uuid, nullable: true }
+        labOrderReference:    { type: string, nullable: true }
+        paidAt:               { type: string, format: date-time, nullable: true }
+        fulfilledAt:          { type: string, format: date-time, nullable: true }
+        createdAt:            { type: string, format: date-time }
+
+    # --- Contractor ---
+    Contractor:
+      type: object
+      properties:
+        id:                  { type: string, format: uuid }
+        businessName:        { type: string }
+        contactName:         { type: string, nullable: true }
+        phone:               { type: string }
+        email:               { type: string, nullable: true }
+        website:             { type: string, nullable: true }
+        cnrppNumber:         { type: string }
+        cnrppExpiry:         { type: string, format: date }
+        provincesServed:     { type: array, items: { type: string } }
+        postalPrefixesServed: { type: array, items: { type: string } }
+        services:            { type: string, enum: [measurement, mitigation, both] }
+        status:              { type: string, enum: [active, inactive, pending, expired] }
+        isFeatured:          { type: boolean }
+
+    # --- Referral Code validation ---
+    ReferralCodeValidation:
+      type: object
+      properties:
+        code:        { type: string }
+        isValid:     { type: boolean }
+        discountPct: { type: number, nullable: true }
+        sourceName:  { type: string }
+
+
+# ── PATHS ─────────────────────────────────────────────────────
+paths:
+
+  # ═══════════════════════════════════════════
+  # AUTH
+  # ═══════════════════════════════════════════
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user account
+      description: |
+        Creates a Supabase Auth user and a corresponding `users` profile row.
+        Supabase sends a verification email automatically. The account cannot
+        complete a purchase until `email_verified_at` is set.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, firstName, lastName]
+              properties:
+                email:           { type: string, format: email }
+                password:        { type: string, minLength: 8 }
+                firstName:       { type: string }
+                lastName:        { type: string }
+                phone:           { type: string }
+                marketingConsent: { type: boolean, default: false }
+      responses:
+        '201':
+          description: Account created. Verification email sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  message: { type: string, example: "Verification email sent to you@example.com" }
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email and password
+      description: Delegates to Supabase Auth. Returns access and refresh tokens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:  { type: string }
+                  refreshToken: { type: string }
+                  expiresIn:    { type: integer, description: Seconds until access token expires }
+                  user:         { $ref: '#/components/schemas/User' }
+        '401':
+          description: Invalid credentials
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: New access token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+                  expiresIn:   { type: integer }
+        '401':
+          description: Invalid or expired refresh token
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Invalidate current session
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Session invalidated
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+    patch:
+      tags: [Auth]
+      summary: Update current user profile
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:       { type: string }
+                lastName:        { type: string }
+                phone:           { type: string }
+                marketingConsent: { type: boolean }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+
+  /auth/password:
+    patch:
+      tags: [Auth]
+      summary: Change password (authenticated)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword:     { type: string, minLength: 8 }
+      responses:
+        '204': { description: Password changed }
+        '401': { description: Current password incorrect }
+
+  /auth/password-reset:
+    post:
+      tags: [Auth]
+      summary: Request password reset email (unauthenticated)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '204':
+          description: Reset email sent if account exists (always 204 to prevent enumeration)
+
+  # ═══════════════════════════════════════════
+  # HOMES
+  # ═══════════════════════════════════════════
+
+  /homes:
+    get:
+      tags: [Homes]
+      summary: List all homes for the current user
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  homes: { type: array, items: { $ref: '#/components/schemas/Home' } }
+    post:
+      tags: [Homes]
+      summary: Create a new home
+      description: |
+        On create, the API derives `fsa` from `postalCode` and looks up
+        `radonZone` and `regionalPrevalencePct` from `radon_zone_map`.
+        These fields must not be sent by the client.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HomeCreate' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  home: { $ref: '#/components/schemas/Home' }
+        '422':
+          description: Validation error (invalid postal code, unknown province, etc.)
+
+  /homes/{homeId}:
+    parameters:
+      - name: homeId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Homes]
+      summary: Get a single home
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  home: { $ref: '#/components/schemas/Home' }
+        '404': { description: Home not found or not owned by caller }
+    patch:
+      tags: [Homes]
+      summary: Update home details
+      description: |
+        If `postalCode` is changed, `fsa`, `radonZone`, and
+        `regionalPrevalencePct` are re-derived automatically.
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HomeCreate' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  home: { $ref: '#/components/schemas/Home' }
+    delete:
+      tags: [Homes]
+      summary: Delete a home
+      description: |
+        Blocked if any test session exists with status other than
+        `cancelled` or `expired`. Returns 409 in that case.
+      security:
+        - BearerAuth: []
+      responses:
+        '204': { description: Home deleted }
+        '409': { description: Active or completed sessions prevent deletion }
+
+  # ═══════════════════════════════════════════
+  # KIT ORDERS
+  # ═══════════════════════════════════════════
+
+  /orders:
+    get:
+      tags: [Kit Orders]
+      summary: List orders for the current user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: perPage
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders: { type: array, items: { $ref: '#/components/schemas/KitOrder' } }
+                  meta:   { $ref: '#/components/schemas/PaginationMeta' }
+    post:
+      tags: [Kit Orders]
+      summary: Create a checkout session (initiate order)
+      description: |
+        Creates a `KitOrder` with `payment_status = pending` and returns a
+        Stripe Checkout Session URL. The client redirects to this URL.
+        On payment success, the Stripe webhook updates `payment_status` to `paid`
+        and triggers order fulfilment.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [homeId, productSku, shippingAddressLine1, shippingCity, shippingProvince, shippingPostalCode]
+              properties:
+                homeId:              { type: string, format: uuid }
+                productSku:          { type: string, enum: [standard_long, real_estate_short, twin_pack] }
+                shippingAddressLine1: { type: string }
+                shippingCity:        { type: string }
+                shippingProvince:    { type: string }
+                shippingPostalCode:  { type: string }
+                referralCode:        { type: string, description: Optional code applied at checkout }
+                successUrl:          { type: string, format: uri, description: Redirect after successful payment }
+                cancelUrl:           { type: string, format: uri, description: Redirect after cancelled payment }
+      responses:
+        '201':
+          description: Order created. Redirect to checkoutUrl.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order:       { $ref: '#/components/schemas/KitOrder' }
+                  checkoutUrl: { type: string, format: uri }
+        '402':
+          description: Email not yet verified. Cannot purchase.
+        '422':
+          description: Validation error or invalid referral code
+
+  /orders/{orderId}:
+    parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Kit Orders]
+      summary: Get a single order
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: { $ref: '#/components/schemas/KitOrder' }
+
+  # ═══════════════════════════════════════════
+  # TEST SESSIONS
+  # ═══════════════════════════════════════════
+
+  /sessions:
+    get:
+      tags: [Test Sessions]
+      summary: List test sessions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: homeId
+          in: query
+          schema: { type: string, format: uuid }
+          description: Filter by home
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ordered, active, retrieval_due, mailed, results_pending, complete, expired, cancelled]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions: { type: array, items: { $ref: '#/components/schemas/TestSession' } }
+
+  /sessions/{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Test Sessions]
+      summary: Get a single test session
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/TestSession' }
+
+  /sessions/{sessionId}/activate:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Test Sessions]
+      summary: Activate a session — confirm kit placement
+      description: |
+        Transitions status from `ordered` → `active`. Sets `activated_at` to today,
+        calculates `expected_completion_date` and `retrieval_due_at`.
+        Schedules the email sequence.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [placementRoom]
+              properties:
+                placementRoom:       { type: string, example: Basement }
+                placementDescription: { type: string }
+                activatedAt:         { type: string, format: date, description: "Defaults to today if omitted" }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/TestSession' }
+        '409':
+          description: Session is not in `ordered` status
+
+  /sessions/{sessionId}/retrieve:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Test Sessions]
+      summary: Mark kit as retrieved from placement
+      description: Transitions status to `retrieval_due` → `mailed` (skips the intermediate state if confirming retrieval and mailing together). If only confirming retrieval, transitions to `mailed` pending.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [retrievedAt]
+              properties:
+                retrievedAt: { type: string, format: date }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/TestSession' }
+
+  /sessions/{sessionId}/mail:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Test Sessions]
+      summary: Confirm kit has been mailed to lab
+      description: |
+        Transitions to `mailed` status. Schedules the `results_prompt` email
+        for 10 days after `mailed_at`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mailedAt]
+              properties:
+                mailedAt: { type: string, format: date }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/TestSession' }
+
+  /sessions/{sessionId}/cancel:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Test Sessions]
+      summary: Cancel a test session
+      description: |
+        Allowed from any non-terminal status. Cancellation by user.
+        Admin cancellation (e.g., post-refund) uses the admin endpoint.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/TestSession' }
+        '409':
+          description: Session is already in a terminal state
+
+  # ═══════════════════════════════════════════
+  # RESULTS
+  # ═══════════════════════════════════════════
+
+  /sessions/{sessionId}/result:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Results]
+      summary: Get the result for a test session
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result: { $ref: '#/components/schemas/Result' }
+        '404':
+          description: No result yet for this session
+    post:
+      tags: [Results]
+      summary: Submit a result for a test session
+      description: |
+        Creates the result record and triggers certificate generation.
+        `zone` is derived server-side from `valueBqm3` — do not submit it.
+        Session must be in `mailed` or `results_pending` status.
+        Transitions session to `complete`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [valueBqm3, recordedAt]
+              properties:
+                valueBqm3:    { type: number, minimum: 0, example: 87.5 }
+                labReference: { type: string }
+                recordedAt:   { type: string, format: date-time }
+      responses:
+        '201':
+          description: Result recorded and certificate generation triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:      { $ref: '#/components/schemas/Result' }
+                  certificate: { $ref: '#/components/schemas/Certificate' }
+        '409':
+          description: Session already has a result, or session is not in valid status for result entry
+
+  # ═══════════════════════════════════════════
+  # CERTIFICATES
+  # ═══════════════════════════════════════════
+
+  /certificates:
+    get:
+      tags: [Certificates]
+      summary: List all certificates for the current user's homes
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: homeId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [valid, expired, superseded] }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificates: { type: array, items: { $ref: '#/components/schemas/Certificate' } }
+
+  /certificates/{certificateId}:
+    parameters:
+      - name: certificateId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Certificates]
+      summary: Get a certificate (authenticated — full detail)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificate: { $ref: '#/components/schemas/Certificate' }
+
+  /certificates/{certificateId}/download:
+    parameters:
+      - name: certificateId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Certificates]
+      summary: Download certificate PDF
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '202':
+          description: Certificate PDF is still being generated. Retry in a few seconds.
+
+  /verify/{certificateId}:
+    parameters:
+      - name: certificateId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Certificates]
+      summary: Public certificate verification (no auth required)
+      description: |
+        Returns minimal public information. Does NOT return the numeric Bq/m³
+        value or any personal information. Safe to embed in QR codes and
+        share with third parties.
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificate: { $ref: '#/components/schemas/CertificatePublic' }
+        '404':
+          description: Certificate not found
+
+  # ═══════════════════════════════════════════
+  # CONTRACTORS
+  # ═══════════════════════════════════════════
+
+  /contractors:
+    get:
+      tags: [Contractors]
+      summary: Find contractors by location
+      description: |
+        Returns active contractors matching the user's FSA or province.
+        FSA match takes priority over province match.
+        Featured contractors are returned first within each group.
+        Auth optional — unauthenticated requests supported for public directory.
+      parameters:
+        - name: fsa
+          in: query
+          schema: { type: string, pattern: '^[A-Za-z]\d[A-Za-z]$' }
+          description: Forward Sortation Area (first 3 chars of postal code)
+        - name: province
+          in: query
+          schema: { type: string }
+        - name: services
+          in: query
+          schema: { type: string, enum: [measurement, mitigation, both] }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contractors: { type: array, items: { $ref: '#/components/schemas/Contractor' } }
+
+  /contractors/{contractorId}/lead:
+    parameters:
+      - name: contractorId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Contractors]
+      summary: Record a contractor interaction event
+      description: |
+        Call when user views a contractor profile, clicks their phone number,
+        or clicks their email/contact link. Used for billing and analytics.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventType]
+              properties:
+                eventType: { type: string, enum: [profile_view, contact_click, phone_click, email_click] }
+                resultId:  { type: string, format: uuid, description: If interaction was prompted by a result }
+      responses:
+        '201':
+          description: Lead event recorded
+
+  # ═══════════════════════════════════════════
+  # REFERRAL CODES
+  # ═══════════════════════════════════════════
+
+  /referral-codes/validate:
+    post:
+      tags: [Referral Codes]
+      summary: Validate a referral code at checkout
+      description: Returns validity, discount percentage, and source name.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReferralCodeValidation' }
+
+  # ═══════════════════════════════════════════
+  # WEBHOOKS
+  # ═══════════════════════════════════════════
+
+  /webhooks/stripe:
+    post:
+      tags: [Webhooks]
+      summary: Stripe webhook receiver
+      description: |
+        Receives signed Stripe events. Signature verified against `STRIPE_WEBHOOK_SECRET`.
+        Unrecognised event types are silently ignored (return 200).
+
+        **Handled events:**
+        - `payment_intent.succeeded` → set order `payment_status = paid`, set `paid_at`,
+          transmit order to lab partner, schedule email sequence
+        - `payment_intent.payment_failed` → set order `payment_status = failed`
+        - `charge.refunded` → set order `payment_status = refunded`, cancel associated sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Raw Stripe event payload
+      parameters:
+        - name: stripe-signature
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Event acknowledged }
+        '400': { description: Invalid signature }
+
+  /webhooks/resend:
+    post:
+      tags: [Webhooks]
+      summary: Resend email status webhook receiver
+      description: |
+        Receives Resend delivery status events. Updates `email_log.status`.
+
+        **Handled events:**
+        - `email.delivered` → status = delivered
+        - `email.bounced` → status = bounced
+        - `email.complained` → status = bounced (treated as bounce)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Raw Resend webhook payload
+      parameters:
+        - name: resend-signature
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Event acknowledged }
+
+  # ═══════════════════════════════════════════
+  # ADMIN
+  # ═══════════════════════════════════════════
+
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: List all users
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: role
+          in: query
+          schema: { type: string, enum: [user, admin] }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: perPage
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users: { type: array, items: { $ref: '#/components/schemas/User' } }
+                  meta:  { $ref: '#/components/schemas/PaginationMeta' }
+        '403': { description: Not an admin }
+
+  /admin/users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Admin]
+      summary: Get any user by ID
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+    patch:
+      tags: [Admin]
+      summary: Update user role or status
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [user, admin] }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+
+  /admin/contractors:
+    post:
+      tags: [Admin]
+      summary: Create a contractor listing
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Contractor' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contractor: { $ref: '#/components/schemas/Contractor' }
+
+  /admin/contractors/{contractorId}:
+    parameters:
+      - name: contractorId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Admin]
+      summary: Update a contractor listing
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Contractor' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contractor: { $ref: '#/components/schemas/Contractor' }
+    delete:
+      tags: [Admin]
+      summary: Delete a contractor listing
+      security:
+        - BearerAuth: []
+      responses:
+        '204': { description: Deleted }
+
+  /admin/referral-codes:
+    get:
+      tags: [Admin]
+      summary: List all referral codes
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codes: { type: array }
+    post:
+      tags: [Admin]
+      summary: Create a referral code
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, sourceType, sourceName]
+              properties:
+                code:        { type: string, pattern: '^[A-Z0-9]{3,20}$' }
+                sourceType:  { type: string, enum: [agent, inspector, broker, partner, promo] }
+                sourceName:  { type: string }
+                sourceEmail: { type: string, format: email }
+                discountPct: { type: number, minimum: 0, maximum: 100 }
+                expiresAt:   { type: string, format: date-time }
+      responses:
+        '201':
+          description: Code created
+
+  /admin/certificates/{certificateId}/supersede:
+    parameters:
+      - name: certificateId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Admin]
+      summary: Manually supersede a certificate (admin only)
+      description: Used when a lab error requires a result correction. Marks old certificate superseded, allows a new result to be entered on the session.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, description: Audit reason for supersession }
+      responses:
+        '200':
+          description: Certificate superseded. Session result lock removed.
+
+  /admin/sessions/{sessionId}/expire:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Admin]
+      summary: Manually expire a session
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Session set to expired status
+
+  /admin/metrics:
+    get:
+      tags: [Admin]
+      summary: Platform dashboard metrics
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalUsers:           { type: integer }
+                  totalHomes:           { type: integer }
+                  activeSessionCount:   { type: integer }
+                  completedThisMonth:   { type: integer }
+                  resultsByZone:
+                    type: object
+                    properties:
+                      below_guideline:  { type: integer }
+                      caution:          { type: integer }
+                      action_required:  { type: integer }
+                      urgent_action:    { type: integer }
+                  certificatesIssued:   { type: integer }
+                  revenueThisMonthCad:  { type: number }
+                  contractorLeadsThisMonth: { type: integer }

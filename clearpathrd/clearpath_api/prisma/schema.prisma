@@ -1,0 +1,393 @@
+// ============================================================
+// ClearPath RD — Prisma Schema
+// Version: 1.0  |  February 2026
+// Database: PostgreSQL (Supabase)
+// Auth:     Supabase Auth (users.id mirrors auth.users.id)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── ENUMS ────────────────────────────────────────────────────
+
+enum UserRole {
+  user
+  admin
+}
+
+enum HomeAgeRange {
+  pre_1980
+  age_1980_2000  @map("1980_2000")
+  age_2000_2010  @map("2000_2010")
+  post_2010
+  unknown
+}
+
+enum FoundationType {
+  full_basement
+  partial_basement
+  crawl_space
+  slab
+  unknown
+}
+
+enum BasementOccupancy {
+  primary_living
+  occasional
+  storage
+  no_basement
+}
+
+enum KitType {
+  long_term
+  real_estate_short
+}
+
+enum SessionStatus {
+  ordered
+  active
+  retrieval_due
+  mailed
+  results_pending
+  complete
+  expired
+  cancelled
+}
+
+enum ResultZone {
+  below_guideline
+  caution
+  action_required
+  urgent_action
+}
+
+enum CertType {
+  residential
+  real_estate
+}
+
+enum CertStatus {
+  valid
+  expired
+  superseded
+}
+
+enum ProductSku {
+  standard_long
+  real_estate_short
+  twin_pack
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum EmailType {
+  order_confirm
+  activation
+  day_30
+  day_60
+  day_80
+  day_88
+  results_prompt
+  certificate_ready
+}
+
+enum EmailStatus {
+  queued
+  sent
+  delivered
+  bounced
+  failed
+}
+
+enum ContractorServices {
+  measurement
+  mitigation
+  both
+}
+
+enum ContractorStatus {
+  active
+  inactive
+  pending
+  expired
+}
+
+enum ReferralSourceType {
+  agent
+  inspector
+  broker
+  partner
+  promo
+}
+
+enum LeadEventType {
+  profile_view
+  contact_click
+  phone_click
+  email_click
+}
+
+// ── MODELS ───────────────────────────────────────────────────
+
+/// Core identity table. id mirrors Supabase auth.users.id.
+model User {
+  id                 String    @id @default(uuid()) @db.Uuid
+  email              String    @unique @db.VarChar(255)
+  passwordHash       String?   @map("password_hash")
+  firstName          String    @map("first_name") @db.VarChar(100)
+  lastName           String    @map("last_name") @db.VarChar(100)
+  phone              String?   @db.VarChar(20)
+  role               UserRole  @default(user)
+  marketingConsent   Boolean   @default(false) @map("marketing_consent")
+  emailVerifiedAt    DateTime? @map("email_verified_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  homes              Home[]
+  kitOrders          KitOrder[]
+  emailLogs          EmailLog[]
+  contractorLeads    ContractorLead[]
+
+  @@map("users")
+}
+
+/// A distinct property. Central record for all radon testing.
+model Home {
+  id                    String             @id @default(uuid()) @db.Uuid
+  userId                String             @map("user_id") @db.Uuid
+  nickname              String?            @db.VarChar(100)
+  addressLine1          String             @map("address_line1") @db.VarChar(200)
+  addressLine2          String?            @map("address_line2") @db.VarChar(200)
+  city                  String             @db.VarChar(100)
+  province              String             @db.Char(2)
+  postalCode            String             @map("postal_code") @db.Char(7)
+  fsa                   String             @db.Char(3)
+  ageRange              HomeAgeRange       @map("age_range")
+  foundationType        FoundationType     @map("foundation_type")
+  basementOccupancy     BasementOccupancy  @map("basement_occupancy")
+  roughinPresent        Boolean            @default(false) @map("roughin_present")
+  radonZone             Int                @map("radon_zone") @db.SmallInt
+  regionalPrevalencePct Decimal            @map("regional_prevalence_pct") @db.Decimal(5, 2)
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  user                  User               @relation(fields: [userId], references: [id])
+  testSessions          TestSession[]
+  kitOrders             KitOrder[]
+  certificates          Certificate[]
+
+  @@index([userId])
+  @@index([fsa])
+  @@map("homes")
+}
+
+/// One radon test from kit activation through result. State machine entity.
+model TestSession {
+  id                     String        @id @default(uuid()) @db.Uuid
+  homeId                 String        @map("home_id") @db.Uuid
+  kitOrderId             String        @map("kit_order_id") @db.Uuid
+  kitType                KitType       @map("kit_type")
+  status                 SessionStatus @default(ordered)
+  kitSerialNumber        String        @unique @map("kit_serial_number") @db.VarChar(50)
+  placementRoom          String        @map("placement_room") @db.VarChar(100)
+  placementDescription   String?       @map("placement_description")
+  activatedAt            DateTime?     @map("activated_at") @db.Date
+  expectedCompletionDate DateTime?     @map("expected_completion_date") @db.Date
+  retrievalDueAt         DateTime?     @map("retrieval_due_at") @db.Date
+  retrievedAt            DateTime?     @map("retrieved_at") @db.Date
+  mailedAt               DateTime?     @map("mailed_at") @db.Date
+  createdAt              DateTime      @default(now()) @map("created_at")
+  updatedAt              DateTime      @updatedAt @map("updated_at")
+
+  home                   Home          @relation(fields: [homeId], references: [id])
+  kitOrder               KitOrder      @relation(fields: [kitOrderId], references: [id])
+  result                 Result?
+  emailLogs              EmailLog[]
+
+  @@index([homeId])
+  @@index([kitOrderId])
+  @@index([status])
+  @@index([expectedCompletionDate])
+  @@map("test_sessions")
+}
+
+/// Immutable result from lab analysis. Locked once certificate is generated.
+model Result {
+  id              String     @id @default(uuid()) @db.Uuid
+  testSessionId   String     @unique @map("test_session_id") @db.Uuid
+  valueBqm3       Decimal    @map("value_bqm3") @db.Decimal(8, 2)
+  zone            ResultZone
+  labReference    String?    @map("lab_reference") @db.VarChar(100)
+  enteredByUserId String     @map("entered_by_user_id") @db.Uuid
+  isImmutable     Boolean    @default(false) @map("is_immutable")
+  recordedAt      DateTime   @map("recorded_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  testSession     TestSession     @relation(fields: [testSessionId], references: [id])
+  certificate     Certificate?
+  contractorLeads ContractorLead[]
+
+  @@index([zone])
+  @@map("results")
+}
+
+/// ClearPath RD Certificate. Public verification via UUID.
+model Certificate {
+  id                String     @id @default(uuid()) @db.Uuid
+  resultId          String     @unique @map("result_id") @db.Uuid
+  homeId            String     @map("home_id") @db.Uuid
+  certificateNumber String     @unique @map("certificate_number") @db.VarChar(30)
+  certType          CertType   @map("cert_type")
+  status            CertStatus @default(valid)
+  verificationUrl   String     @map("verification_url")
+  pdfStoragePath    String?    @map("pdf_storage_path")
+  validFrom         DateTime   @map("valid_from") @db.Date
+  validUntil        DateTime   @map("valid_until") @db.Date
+  generatedAt       DateTime   @default(now()) @map("generated_at")
+  supersededAt      DateTime?  @map("superseded_at")
+
+  result            Result     @relation(fields: [resultId], references: [id])
+  home              Home       @relation(fields: [homeId], references: [id])
+
+  @@index([homeId])
+  @@index([status, validUntil])
+  @@map("certificates")
+}
+
+/// Kit purchase. Integrates with Stripe and lab fulfilment partner.
+model KitOrder {
+  id                    String        @id @default(uuid()) @db.Uuid
+  userId                String        @map("user_id") @db.Uuid
+  homeId                String        @map("home_id") @db.Uuid
+  productSku            ProductSku    @map("product_sku")
+  quantity              Int           @default(1)
+  shippingAddressLine1  String        @map("shipping_address_line1") @db.VarChar(200)
+  shippingCity          String        @map("shipping_city") @db.VarChar(100)
+  shippingProvince      String        @map("shipping_province") @db.Char(2)
+  shippingPostalCode    String        @map("shipping_postal_code") @db.Char(7)
+  subtotalCad           Decimal       @map("subtotal_cad") @db.Decimal(10, 2)
+  taxCad                Decimal       @map("tax_cad") @db.Decimal(10, 2)
+  totalCad              Decimal       @map("total_cad") @db.Decimal(10, 2)
+  stripePaymentIntentId String?       @unique @map("stripe_payment_intent_id") @db.VarChar(100)
+  paymentStatus         PaymentStatus @default(pending) @map("payment_status")
+  referralCodeId        String?       @map("referral_code_id") @db.Uuid
+  labOrderReference     String?       @map("lab_order_reference") @db.VarChar(100)
+  paidAt                DateTime?     @map("paid_at")
+  fulfilledAt           DateTime?     @map("fulfilled_at")
+  createdAt             DateTime      @default(now()) @map("created_at")
+
+  user                  User          @relation(fields: [userId], references: [id])
+  home                  Home          @relation(fields: [homeId], references: [id])
+  referralCode          ReferralCode? @relation(fields: [referralCodeId], references: [id])
+  testSessions          TestSession[]
+
+  @@index([userId])
+  @@map("kit_orders")
+}
+
+/// Audit log for all outbound emails. Prevents duplicate sends.
+model EmailLog {
+  id                String      @id @default(uuid()) @db.Uuid
+  userId            String      @map("user_id") @db.Uuid
+  testSessionId     String?     @map("test_session_id") @db.Uuid
+  emailType         EmailType   @map("email_type")
+  providerMessageId String?     @map("provider_message_id") @db.VarChar(200)
+  status            EmailStatus @default(queued)
+  scheduledAt       DateTime    @map("scheduled_at")
+  sentAt            DateTime?   @map("sent_at")
+
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testSession       TestSession? @relation(fields: [testSessionId], references: [id])
+
+  @@index([userId, emailType])
+  @@index([testSessionId, emailType])
+  @@map("email_log")
+}
+
+/// C-NRPP certified radon professional directory.
+model Contractor {
+  id                   String             @id @default(uuid()) @db.Uuid
+  businessName         String             @map("business_name") @db.VarChar(200)
+  contactName          String?            @map("contact_name") @db.VarChar(100)
+  phone                String             @db.VarChar(20)
+  email                String?            @db.VarChar(255)
+  website              String?
+  cnrppNumber          String             @unique @map("cnrpp_number") @db.VarChar(50)
+  cnrppExpiry          DateTime           @map("cnrpp_expiry") @db.Date
+  provincesServed      String[]           @map("provinces_served")
+  postalPrefixesServed String[]           @map("postal_prefixes_served")
+  services             ContractorServices
+  status               ContractorStatus   @default(active)
+  isFeatured           Boolean            @default(false) @map("is_featured")
+  referralFeeCad       Decimal?           @map("referral_fee_cad") @db.Decimal(6, 2)
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  leads                ContractorLead[]
+
+  @@map("contractors")
+}
+
+/// Append-only event log for contractor referral interactions.
+model ContractorLead {
+  id             String        @id @default(uuid()) @db.Uuid
+  contractorId   String        @map("contractor_id") @db.Uuid
+  userId         String        @map("user_id") @db.Uuid
+  resultId       String?       @map("result_id") @db.Uuid
+  eventType      LeadEventType @map("event_type")
+  userPostalCode String?       @map("user_postal_code") @db.Char(7)
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  contractor     Contractor    @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  result         Result?       @relation(fields: [resultId], references: [id])
+
+  @@index([contractorId])
+  @@index([contractorId, eventType])
+  @@map("contractor_leads")
+}
+
+/// FSA-to-radon-zone lookup. Read-only at runtime.
+model RadonZoneMap {
+  id            String   @id @default(uuid()) @db.Uuid
+  fsa           String   @unique @db.Char(3)
+  province      String   @db.Char(2)
+  zoneLevel     Int      @map("zone_level") @db.SmallInt
+  prevalencePct Decimal  @map("prevalence_pct") @db.Decimal(5, 2)
+  surveySource  String   @map("survey_source") @db.VarChar(100)
+  surveyYear    Int      @map("survey_year") @db.SmallInt
+  schemaVersion Int      @default(1) @map("schema_version") @db.SmallInt
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([province])
+  @@map("radon_zone_map")
+}
+
+/// Referral and promotional codes applied at checkout.
+model ReferralCode {
+  id          String             @id @default(uuid()) @db.Uuid
+  code        String             @unique @db.VarChar(30)
+  sourceType  ReferralSourceType @map("source_type")
+  sourceName  String             @map("source_name") @db.VarChar(200)
+  sourceEmail String?            @map("source_email") @db.VarChar(255)
+  isActive    Boolean            @default(true) @map("is_active")
+  usesCount   Int                @default(0) @map("uses_count")
+  discountPct Decimal?           @map("discount_pct") @db.Decimal(5, 2)
+  createdAt   DateTime           @default(now()) @map("created_at")
+  expiresAt   DateTime?          @map("expires_at")
+
+  kitOrders   KitOrder[]
+
+  @@map("referral_codes")
+}
