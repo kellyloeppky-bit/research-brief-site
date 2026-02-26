@@ -8,6 +8,9 @@ import databasePlugin from './plugins/database.plugin.js';
 import authPlugin from './plugins/auth.plugin.js';
 import responseFormatterPlugin from './plugins/response-formatter.plugin.js';
 
+// Phase 6 plugins
+import rawBodyPlugin from './plugins/raw-body.plugin.js';
+
 // Phase 2 middleware
 import { authenticate } from './middleware/authenticate.js';
 import { requireAuth } from './middleware/authorize.js';
@@ -32,6 +35,9 @@ import testSessionsRoutes from './routes/test-sessions.routes.js';
 import resultsRoutes from './routes/results.routes.js';
 import certificatesRoutes from './routes/certificates.routes.js';
 
+// Phase 6 routes
+import stripeWebhooksRoutes from './routes/stripe-webhooks.routes.js';
+
 dotenv.config();
 
 const server = Fastify({
@@ -48,6 +54,7 @@ server.setSerializerCompiler(serializerCompiler);
 
 // Register plugins in correct order
 await server.register(cors);
+await server.register(rawBodyPlugin); // Must be before other plugins for Stripe webhooks
 await server.register(errorHandlerPlugin);
 await server.register(databasePlugin);
 await server.register(authPlugin);
@@ -65,6 +72,9 @@ await server.register(testSessionsRoutes, { prefix: '/api/v1/test-sessions' });
 // Phase 5: Register API routes
 await server.register(resultsRoutes, { prefix: '/api/v1/results' });
 await server.register(certificatesRoutes, { prefix: '/api/v1/certificates' });
+
+// Phase 6: Register API routes
+await server.register(stripeWebhooksRoutes, { prefix: '/api/v1/stripe' });
 
 // Health check route
 server.get('/health', async (_request, reply) => {

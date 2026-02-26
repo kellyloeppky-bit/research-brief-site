@@ -5,11 +5,18 @@
  * Stripe integration deferred to Phase 6.
  */
 
+import { z } from 'zod';
 import { FastifyPluginAsync } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireAuth } from '../middleware/authorize.js';
 import { requireOwnership } from '../middleware/require-ownership.js';
+import {
+  createPaymentIntent,
+  getPaymentIntent,
+  createRefund,
+} from '../services/payment.service.js';
+import { isStripeConfigured } from '../lib/stripe/stripe-client.js';
 import {
   createKitOrderSchema,
   updateKitOrderSchema,
@@ -82,16 +89,60 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
         }
       }
 
-      // Create kit order with default paymentStatus: 'paid' for testing
+      // Create kit order with 'pending' status
       const kitOrder = await server.prisma.kitOrder.create({
         data: {
           ...body,
           userId: user.id,
-          paymentStatus: 'paid', // Default for testing
+          paymentStatus: 'pending',
         },
       });
 
-      return reply.status(201).success(kitOrder);
+      // Create Stripe PaymentIntent if Stripe is configured
+      let clientSecret: string | null = null;
+
+      if (isStripeConfigured()) {
+        try {
+          const paymentIntent = await createPaymentIntent(
+            kitOrder.id,
+            body.productSku,
+            body.quantity,
+            {
+              userId: user.id,
+              homeId: body.homeId,
+              userEmail: user.email,
+            }
+          );
+
+          // Update kit order with Stripe payment intent ID
+          await server.prisma.kitOrder.update({
+            where: { id: kitOrder.id },
+            data: {
+              stripePaymentIntentId: paymentIntent.id,
+            },
+          });
+
+          clientSecret = paymentIntent.client_secret;
+
+          server.log.info(
+            `Created PaymentIntent ${paymentIntent.id} for kit order ${kitOrder.id}`
+          );
+        } catch (error) {
+          server.log.error(
+            { err: error },
+            'Failed to create Stripe PaymentIntent'
+          );
+          // Continue without Stripe - order still created
+        }
+      } else {
+        server.log.warn('Stripe not configured - order created without payment');
+      }
+
+      // Return kit order with client secret for frontend
+      return reply.status(201).success({
+        kitOrder,
+        clientSecret,
+      });
     }
   );
 
@@ -257,6 +308,148 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
       });
 
       return reply.success({ message: 'Kit order deleted successfully' });
+    }
+  );
+
+  /**
+   * GET /kit-orders/:id/payment-status
+   * Get payment status for kit order
+   * Auth: Required (owner or admin)
+   */
+  serverWithTypes.get(
+    '/:id/payment-status',
+    {
+      preHandler: [
+        authenticate,
+        requireOwnership('kit order', async (req) => {
+          const { id } = req.params as { id: string };
+          return server.prisma.kitOrder.findUnique({ where: { id } });
+        }),
+      ],
+      schema: {
+        params: getKitOrderParamsSchema,
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as GetKitOrderParams;
+
+      const kitOrder = await server.prisma.kitOrder.findUnique({
+        where: { id },
+      });
+
+      if (!kitOrder) {
+        throw new NotFoundError('Kit order not found');
+      }
+
+      // Get latest payment intent status from Stripe
+      let paymentDetails = null;
+
+      if (kitOrder.stripePaymentIntentId && isStripeConfigured()) {
+        try {
+          const paymentIntent = await getPaymentIntent(
+            kitOrder.stripePaymentIntentId
+          );
+
+          paymentDetails = {
+            status: paymentIntent.status,
+            amount: paymentIntent.amount,
+            currency: paymentIntent.currency,
+            created: paymentIntent.created,
+          };
+        } catch (error) {
+          server.log.error(
+            { err: error },
+            'Failed to fetch payment intent from Stripe'
+          );
+        }
+      }
+
+      return reply.success({
+        kitOrderId: kitOrder.id,
+        paymentStatus: kitOrder.paymentStatus,
+        paidAt: kitOrder.paidAt,
+        paymentDetails,
+      });
+    }
+  );
+
+  /**
+   * POST /kit-orders/:id/refund
+   * Refund a kit order (admin only)
+   * Auth: Required (admin)
+   */
+  serverWithTypes.post(
+    '/:id/refund',
+    {
+      preHandler: [authenticate, requireAuth('admin')],
+      schema: {
+        params: getKitOrderParamsSchema,
+        body: z.object({
+          amount: z.number().positive().optional(),
+          reason: z
+            .enum(['duplicate', 'fraudulent', 'requested_by_customer'])
+            .optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as GetKitOrderParams;
+      const body = request.body as {
+        amount?: number;
+        reason?: 'duplicate' | 'fraudulent' | 'requested_by_customer';
+      };
+
+      const kitOrder = await server.prisma.kitOrder.findUnique({
+        where: { id },
+      });
+
+      if (!kitOrder) {
+        throw new NotFoundError('Kit order not found');
+      }
+
+      if (!kitOrder.stripePaymentIntentId) {
+        throw new BadRequestError('No payment intent found for this order');
+      }
+
+      if (kitOrder.paymentStatus !== 'paid') {
+        throw new BadRequestError(
+          'Can only refund paid orders. Current status: ' +
+            kitOrder.paymentStatus
+        );
+      }
+
+      if (!isStripeConfigured()) {
+        throw new BadRequestError('Stripe not configured');
+      }
+
+      // Create refund in Stripe
+      const refund = await createRefund(
+        kitOrder.stripePaymentIntentId,
+        body.amount,
+        body.reason
+      );
+
+      // Update kit order status
+      await server.prisma.kitOrder.update({
+        where: { id },
+        data: {
+          paymentStatus: 'refunded',
+        },
+      });
+
+      server.log.info(
+        `Refund created: ${refund.id} for kit order ${kitOrder.id}`
+      );
+
+      return reply.success({
+        refund: {
+          id: refund.id,
+          amount: refund.amount,
+          status: refund.status,
+          reason: refund.reason,
+          created: refund.created,
+        },
+      });
     }
   );
 };

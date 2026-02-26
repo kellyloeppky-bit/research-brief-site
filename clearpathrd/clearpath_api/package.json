@@ -27,6 +27,7 @@
     "fastify-type-provider-zod": "^6.1.0",
     "jsonwebtoken": "^9.0.3",
     "prisma": "^6.19.2",
+    "stripe": "^20.4.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
