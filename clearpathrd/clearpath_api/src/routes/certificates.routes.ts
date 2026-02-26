@@ -36,6 +36,7 @@ import {
 } from '../lib/errors/http-errors.js';
 import type { UserContext } from '../types/auth.types.js';
 import { isAdmin } from '../lib/auth/rbac.js';
+import { sendCertificateReadyEmail } from '../services/email-notification.service.js';
 
 const certificatesRoutes: FastifyPluginAsync = async (server) => {
   const serverWithTypes = server.withTypeProvider<ZodTypeProvider>();
@@ -133,6 +134,38 @@ const certificatesRoutes: FastifyPluginAsync = async (server) => {
         where: { id: body.resultId },
         data: { isImmutable: true },
       });
+
+      // Send certificate ready email (non-blocking)
+      const certificateWithRelations = await server.prisma.certificate.findUnique({
+        where: { id: updatedCertificate.id },
+        include: {
+          home: true,
+          result: true,
+        },
+      });
+
+      if (certificateWithRelations) {
+        const homeUserId = certificateWithRelations.home.userId;
+        const homeOwner = await server.prisma.user.findUnique({
+          where: { id: homeUserId },
+        });
+
+        if (homeOwner) {
+          // Convert Decimal to number for email template
+          const certificateForEmail = {
+            ...certificateWithRelations,
+            result: {
+              valueBqm3: Number(certificateWithRelations.result.valueBqm3),
+            },
+          };
+
+          sendCertificateReadyEmail(certificateForEmail, homeOwner.email).catch(
+            (err) => {
+              server.log.error({ err }, 'Failed to send certificate email');
+            }
+          );
+        }
+      }
 
       return reply.status(201).success(updatedCertificate);
     }

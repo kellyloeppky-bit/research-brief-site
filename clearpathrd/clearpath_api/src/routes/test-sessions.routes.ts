@@ -41,6 +41,7 @@ import {
   BadRequestError,
   ConflictError,
 } from '../lib/errors/http-errors.js';
+import { sendTestActivatedEmail } from '../services/email-notification.service.js';
 import type { UserContext } from '../types/auth.types.js';
 import { isAdmin } from '../lib/auth/rbac.js';
 
@@ -136,6 +137,26 @@ const testSessionsRoutes: FastifyPluginAsync = async (server) => {
           retrievalDueAt: calculateRetrievalDueAt(kitType, activatedAt),
         },
       });
+
+      // Send activation email (non-blocking)
+      const testSessionWithHome = await server.prisma.testSession.findUnique({
+        where: { id: testSession.id },
+        include: { home: true },
+      });
+
+      if (testSessionWithHome) {
+        const user = await server.prisma.user.findUnique({
+          where: { id: testSessionWithHome.home.userId },
+        });
+
+        if (user) {
+          sendTestActivatedEmail(testSessionWithHome, user.email).catch(
+            (err) => {
+              server.log.error({ err }, 'Failed to send activation email');
+            }
+          );
+        }
+      }
 
       return reply.status(201).success(testSession);
     }

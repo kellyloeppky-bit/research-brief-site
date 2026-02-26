@@ -9,6 +9,11 @@ import type { PrismaClient } from '@prisma/client';
 import { stripe, isStripeConfigured } from '../lib/stripe/stripe-client.js';
 import { stripeConfig } from '../config/stripe.config.js';
 import { updateKitOrderFromPayment } from './payment.service.js';
+import {
+  sendPaymentReceiptEmail,
+  sendPaymentFailedEmail,
+  sendRefundProcessedEmail,
+} from './email-notification.service.js';
 
 /**
  * Verify Stripe webhook signature
@@ -56,6 +61,18 @@ async function handlePaymentSucceeded(
   try {
     await updateKitOrderFromPayment(paymentIntent.id, 'paid', prisma);
     console.log(`✓ Kit order marked as paid for payment: ${paymentIntent.id}`);
+
+    // Send payment receipt email (non-blocking)
+    const kitOrderWithUser = await prisma.kitOrder.findFirst({
+      where: { stripePaymentIntentId: paymentIntent.id },
+      include: { user: true },
+    });
+
+    if (kitOrderWithUser) {
+      sendPaymentReceiptEmail(kitOrderWithUser).catch((err) => {
+        console.error('Failed to send payment receipt email:', err);
+      });
+    }
   } catch (error) {
     console.error(`Failed to update kit order:`, error);
     // Don't throw - webhook should still return 200 to prevent retries
@@ -78,6 +95,19 @@ async function handlePaymentFailed(
   try {
     await updateKitOrderFromPayment(paymentIntent.id, 'failed', prisma);
     console.log(`✓ Kit order marked as failed for payment: ${paymentIntent.id}`);
+
+    // Send payment failed email (non-blocking)
+    const kitOrderWithUser = await prisma.kitOrder.findFirst({
+      where: { stripePaymentIntentId: paymentIntent.id },
+      include: { user: true },
+    });
+
+    if (kitOrderWithUser) {
+      const failureMessage = paymentIntent.last_payment_error?.message;
+      sendPaymentFailedEmail(kitOrderWithUser, failureMessage).catch((err) => {
+        console.error('Failed to send payment failed email:', err);
+      });
+    }
   } catch (error) {
     console.error(`Failed to update kit order:`, error);
   }
@@ -111,6 +141,25 @@ async function handleChargeRefunded(
     console.log(
       `✓ Kit order marked as refunded for payment: ${paymentIntentId}`
     );
+
+    // Send refund email (non-blocking)
+    const kitOrderWithUser = await prisma.kitOrder.findFirst({
+      where: { stripePaymentIntentId: paymentIntentId },
+      include: { user: true },
+    });
+
+    if (kitOrderWithUser && charge.amount_refunded) {
+      const refundAmountCad = charge.amount_refunded / 100; // Convert cents to CAD
+      const refundReason =
+        charge.refunds?.data[0]?.reason || 'requested_by_customer';
+      sendRefundProcessedEmail(
+        kitOrderWithUser,
+        refundAmountCad,
+        refundReason
+      ).catch((err) => {
+        console.error('Failed to send refund email:', err);
+      });
+    }
   } catch (error) {
     console.error(`Failed to update kit order:`, error);
   }

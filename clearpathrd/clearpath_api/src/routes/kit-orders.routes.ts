@@ -17,6 +17,7 @@ import {
   createRefund,
 } from '../services/payment.service.js';
 import { isStripeConfigured } from '../lib/stripe/stripe-client.js';
+import { sendKitOrderConfirmationEmail } from '../services/email-notification.service.js';
 import {
   createKitOrderSchema,
   updateKitOrderSchema,
@@ -136,6 +137,18 @@ const kitOrdersRoutes: FastifyPluginAsync = async (server) => {
         }
       } else {
         server.log.warn('Stripe not configured - order created without payment');
+      }
+
+      // Send order confirmation email (non-blocking)
+      const kitOrderWithUser = await server.prisma.kitOrder.findUnique({
+        where: { id: kitOrder.id },
+        include: { user: true },
+      });
+
+      if (kitOrderWithUser) {
+        sendKitOrderConfirmationEmail(kitOrderWithUser).catch((err) => {
+          server.log.error({ err }, 'Failed to send order confirmation email');
+        });
       }
 
       // Return kit order with client secret for frontend

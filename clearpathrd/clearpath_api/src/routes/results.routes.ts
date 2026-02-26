@@ -36,6 +36,7 @@ import {
 } from '../lib/errors/http-errors.js';
 import type { UserContext } from '../types/auth.types.js';
 import { isAdmin } from '../lib/auth/rbac.js';
+import { sendResultsAvailableEmail } from '../services/email-notification.service.js';
 
 const resultsRoutes: FastifyPluginAsync = async (server) => {
   const serverWithTypes = server.withTypeProvider<ZodTypeProvider>();
@@ -115,6 +116,31 @@ const resultsRoutes: FastifyPluginAsync = async (server) => {
           'complete',
           server.prisma
         );
+      }
+
+      // Send results available email (non-blocking)
+      const resultWithRelations = await server.prisma.result.findUnique({
+        where: { id: result.id },
+        include: {
+          testSession: {
+            include: { home: true },
+          },
+        },
+      });
+
+      if (resultWithRelations) {
+        const homeUserId = resultWithRelations.testSession.home.userId;
+        const homeOwner = await server.prisma.user.findUnique({
+          where: { id: homeUserId },
+        });
+
+        if (homeOwner) {
+          sendResultsAvailableEmail(resultWithRelations, homeOwner.email).catch(
+            (err) => {
+              server.log.error({ err }, 'Failed to send results email');
+            }
+          );
+        }
       }
 
       return reply.status(201).success(result);
