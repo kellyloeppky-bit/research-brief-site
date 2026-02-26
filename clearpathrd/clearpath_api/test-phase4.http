@@ -1,0 +1,355 @@
+### Phase 4: Test Session Management - API Tests
+### Use REST Client extension in VS Code to run these tests
+
+@baseUrl = http://localhost:3001/api/v1
+@adminEmail = admin@clearpathrd.com
+@adminPassword = SecureAdminPass123!
+@userEmail = john.doe@example.com
+@userPassword = SecurePass123!
+
+### Variables (will be set from responses)
+# @token = {{login.response.body.data.token}}
+# @userId = {{login.response.body.data.user.id}}
+# @homeId = (get from GET /homes)
+# @kitOrderId = (get from POST /kit-orders)
+# @testSessionId = (get from POST /test-sessions)
+
+###############################################################################
+# Step 1: Login as regular user
+###############################################################################
+
+# @name login
+POST {{baseUrl}}/users/login
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
+}
+
+###
+# Save the token from the response above and use it in subsequent requests
+# Authorization: Bearer YOUR_TOKEN_HERE
+
+###############################################################################
+# Step 2: Get user's homes
+###############################################################################
+
+GET {{baseUrl}}/homes
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+# Copy a homeId from the response above
+
+###############################################################################
+# Step 3: Create a kit order
+###############################################################################
+
+# @name createKitOrder
+POST {{baseUrl}}/kit-orders
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "homeId": "PASTE_HOME_ID_HERE",
+  "productSku": "standard_long",
+  "quantity": 1,
+  "shippingAddressLine1": "123 Main Street",
+  "shippingCity": "Toronto",
+  "shippingProvince": "ON",
+  "shippingPostalCode": "M5H 2N2",
+  "subtotalCad": 89.99,
+  "taxCad": 11.70,
+  "totalCad": 101.69
+}
+
+###
+# Expected: 201 Created with kit order data
+# Copy the kitOrderId from response
+
+###############################################################################
+# Step 4: List kit orders
+###############################################################################
+
+GET {{baseUrl}}/kit-orders
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+# Expected: 200 OK with array of kit orders and pagination
+
+###############################################################################
+# Step 5: Get specific kit order
+###############################################################################
+
+GET {{baseUrl}}/kit-orders/PASTE_KIT_ORDER_ID_HERE
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+# Expected: 200 OK with kit order details
+
+###############################################################################
+# Step 6: Activate a test session (creates session in 'active' state)
+###############################################################################
+
+# @name createTestSession
+POST {{baseUrl}}/test-sessions
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "homeId": "PASTE_HOME_ID_HERE",
+  "kitOrderId": "PASTE_KIT_ORDER_ID_HERE",
+  "kitSerialNumber": "KIT-TEST-001",
+  "kitType": "long_term",
+  "placementRoom": "Basement",
+  "placementDescription": "Placed on floor near sump pump"
+}
+
+###
+# Expected: 201 Created with test session data
+# Verify:
+# - status: 'active'
+# - activatedAt: today's date
+# - expectedCompletionDate: today + 91 days
+# - retrievalDueAt: today + 80 days
+# Copy the testSessionId from response
+
+###############################################################################
+# Step 7: List test sessions
+###############################################################################
+
+GET {{baseUrl}}/test-sessions
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+# Expected: 200 OK with array of test sessions and pagination
+
+###############################################################################
+# Step 8: Get specific test session
+###############################################################################
+
+GET {{baseUrl}}/test-sessions/PASTE_TEST_SESSION_ID_HERE
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+# Expected: 200 OK with test session details including timeline fields
+
+###############################################################################
+# Step 9: Mark kit as retrieved
+###############################################################################
+
+PATCH {{baseUrl}}/test-sessions/PASTE_TEST_SESSION_ID_HERE/retrieve
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "retrievedAt": "2026-02-25T12:00:00.000Z"
+}
+
+###
+# Expected: 200 OK with updated session
+# Verify: retrievedAt is set
+
+###############################################################################
+# Step 10: Update status to retrieval_due (state machine test)
+###############################################################################
+
+PUT {{baseUrl}}/test-sessions/PASTE_TEST_SESSION_ID_HERE
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "status": "retrieval_due"
+}
+
+###
+# Expected: 200 OK with updated status
+# Verify: status changed from 'active' to 'retrieval_due'
+
+###############################################################################
+# Step 11: Mark kit as mailed
+###############################################################################
+
+PATCH {{baseUrl}}/test-sessions/PASTE_TEST_SESSION_ID_HERE/mail
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "mailedAt": "2026-02-25T14:00:00.000Z"
+}
+
+###
+# Expected: 200 OK with updated session
+# Verify: status changed to 'mailed', mailedAt is set
+
+###############################################################################
+# Step 12: Test invalid state transition (should fail)
+###############################################################################
+
+PUT {{baseUrl}}/test-sessions/PASTE_TEST_SESSION_ID_HERE
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "status": "active"
+}
+
+###
+# Expected: 409 Conflict
+# Error message should list allowed transitions from 'mailed' status
+
+###############################################################################
+# Step 13: Transition to results_pending
+###############################################################################
+
+PUT {{baseUrl}}/test-sessions/PASTE_TEST_SESSION_ID_HERE
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "status": "results_pending"
+}
+
+###
+# Expected: 200 OK with updated status
+
+###############################################################################
+# Step 14: Cancel a test session (create a new session first)
+###############################################################################
+
+# First, create another test session
+POST {{baseUrl}}/test-sessions
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "homeId": "PASTE_HOME_ID_HERE",
+  "kitOrderId": "PASTE_KIT_ORDER_ID_HERE",
+  "kitSerialNumber": "KIT-TEST-002",
+  "kitType": "long_term",
+  "placementRoom": "Bedroom",
+  "placementDescription": "Test session for cancellation"
+}
+
+###
+# Then cancel it
+
+PATCH {{baseUrl}}/test-sessions/PASTE_NEW_SESSION_ID_HERE/cancel
+Authorization: Bearer YOUR_TOKEN_HERE
+
+###
+# Expected: 200 OK with status 'cancelled'
+
+###############################################################################
+# Step 15: Test ownership - try to access another user's session
+###############################################################################
+
+# Login as a different user first, then try to access the first user's session
+GET {{baseUrl}}/test-sessions/PASTE_FIRST_SESSION_ID_HERE
+Authorization: Bearer DIFFERENT_USER_TOKEN_HERE
+
+###
+# Expected: 403 Forbidden
+# Error: "You do not have permission to access this test session"
+
+###############################################################################
+# Step 16: Test admin bypass - login as admin
+###############################################################################
+
+# @name adminLogin
+POST {{baseUrl}}/users/login
+Content-Type: application/json
+
+{
+  "email": "{{adminEmail}}",
+  "password": "{{adminPassword}}"
+}
+
+###
+# Use admin token to access any user's session
+
+GET {{baseUrl}}/test-sessions/PASTE_ANY_SESSION_ID_HERE
+Authorization: Bearer ADMIN_TOKEN_HERE
+
+###
+# Expected: 200 OK (admin can access any session)
+
+###############################################################################
+# Step 17: Test duplicate serial number
+###############################################################################
+
+POST {{baseUrl}}/test-sessions
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "homeId": "PASTE_HOME_ID_HERE",
+  "kitOrderId": "PASTE_KIT_ORDER_ID_HERE",
+  "kitSerialNumber": "KIT-TEST-001",
+  "kitType": "long_term",
+  "placementRoom": "Living Room"
+}
+
+###
+# Expected: 409 Conflict
+# Error: "Kit serial number already in use"
+
+###############################################################################
+# Step 18: Test short-term kit timeline
+###############################################################################
+
+# First, create a short-term kit order
+POST {{baseUrl}}/kit-orders
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "homeId": "PASTE_HOME_ID_HERE",
+  "productSku": "real_estate_short",
+  "quantity": 1,
+  "shippingAddressLine1": "456 Oak Avenue",
+  "shippingCity": "Vancouver",
+  "shippingProvince": "BC",
+  "shippingPostalCode": "V6B 1A1",
+  "subtotalCad": 49.99,
+  "taxCad": 6.50,
+  "totalCad": 56.49
+}
+
+###
+# Then activate a short-term session
+
+POST {{baseUrl}}/test-sessions
+Authorization: Bearer YOUR_TOKEN_HERE
+Content-Type: application/json
+
+{
+  "homeId": "PASTE_HOME_ID_HERE",
+  "kitOrderId": "PASTE_SHORT_TERM_ORDER_ID_HERE",
+  "kitSerialNumber": "KIT-SHORT-001",
+  "kitType": "real_estate_short",
+  "placementRoom": "Living Room",
+  "placementDescription": "48-hour test"
+}
+
+###
+# Expected: 201 Created
+# Verify:
+# - expectedCompletionDate: today + 4 days
+# - retrievalDueAt: today + 2 days
+
+###############################################################################
+# Test Summary
+###############################################################################
+
+# ✓ Kit order CRUD operations
+# ✓ Test session activation with timeline calculation
+# ✓ State machine transitions (active → retrieval_due → mailed → results_pending)
+# ✓ Invalid transition prevention (409 Conflict)
+# ✓ Action endpoints (/retrieve, /mail, /cancel)
+# ✓ Ownership checks (403 for non-owners)
+# ✓ Admin bypass (admins can access any session)
+# ✓ Duplicate serial number prevention (409 Conflict)
+# ✓ Long-term vs short-term timeline differences
+# ✓ Foreign key validations (home, kitOrder)
+# ✓ Pagination on list endpoints
