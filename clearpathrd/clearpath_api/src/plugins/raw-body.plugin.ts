@@ -20,17 +20,17 @@ declare module 'fastify' {
  * Captures raw body before JSON parsing for routes that need it
  */
 const rawBodyPlugin: FastifyPluginAsync = async (fastify) => {
-  // Add hook to capture raw body for all requests
+  // Add hook to capture raw body only for Stripe webhook routes
   fastify.addHook('preParsing', async (request: FastifyRequest, payload: any) => {
-    // Only capture for POST requests with JSON content type
+    // Only process Stripe webhook routes
     if (
       request.method === 'POST' &&
-      request.headers['content-type']?.includes('application/json')
+      request.url.includes('/stripe/webhook')
     ) {
-      const chunks: Buffer[] = [];
-
-      // Check if payload is iterable
+      // Only process if payload is a stream
       if (payload && typeof payload[Symbol.asyncIterator] === 'function') {
+        const chunks: Buffer[] = [];
+
         // Collect chunks
         for await (const chunk of payload) {
           chunks.push(chunk as Buffer);
@@ -50,7 +50,8 @@ const rawBodyPlugin: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    return payload;
+    // For all other routes, don't return anything (use original payload)
+    // Returning undefined tells Fastify to use the original payload stream
   });
 
   fastify.log.info('✓ Raw body plugin registered');
